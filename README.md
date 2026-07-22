@@ -36,19 +36,19 @@ The current visualizer includes:
 First check LAN discovery without requesting audio permission:
 
 ```sh
-cargo run --release -- --discover-only
+light-wizard --discover-only
 ```
 
 Then start the visualizer:
 
 ```sh
-cargo run --release
+light-wizard
 ```
 
 Or play and visualize one local file through the default system output device:
 
 ```sh
-cargo run --release -- --audio-file song.mp3
+light-wizard --audio-file song.mp3
 ```
 
 File mode supports MP3, FLAC, WAV, Ogg Vorbis, mono/stereo Ogg Opus (`.opus`,
@@ -66,14 +66,14 @@ built-in default values, validates each answer, and previews the TOML before
 saving it, run:
 
 ```sh
-cargo run -- --config-wizard
+light-wizard --config-wizard
 ```
 
 The wizard writes `light-wizard.toml`. To create or edit another file, combine
 it with `--config`, for example:
 
 ```sh
-cargo run -- --config studio.toml --config-wizard
+light-wizard --config studio.toml --config-wizard
 ```
 
 macOS should request Screen & System Audio Recording permission on the first
@@ -86,7 +86,7 @@ If broadcast discovery is blocked by the router or a VPN, provide the light
 addresses directly:
 
 ```sh
-cargo run --release -- --light 192.168.1.41 --light 192.168.1.42
+light-wizard --light 192.168.1.41 --light 192.168.1.42
 ```
 
 MAC addresses are learned from `getPilot` replies and are not required. A
@@ -96,20 +96,20 @@ Useful experiments:
 
 ```sh
 # Verify capture and analysis without touching any lights
-cargo run --release -- --dry-run
+light-wizard --dry-run
 
 # Play a file and print its analysis without discovering or controlling lights
-cargo run --release -- --audio-file song.flac --dry-run
+light-wizard --audio-file song.flac --dry-run
 
 # More sensitive, lower-traffic, two-color pitch wheel
-cargo run --release -- --sensitivity 1.8 --fps 20 \
+light-wizard --sensitivity 1.8 --fps 20 \
   --palette '#ff0055,#0055ff'
 
 # Print every supported setting
-cargo run -- --print-default-config
+light-wizard --print-default-config
 ```
 
-Run `cargo run -- --help` for all command-line overrides.
+Run `light-wizard --help` for all command-line overrides.
 
 ## Configuration
 
@@ -176,7 +176,7 @@ to tune pitch settings without sending anything to the lights. In file mode,
 A manual macOS playback test is:
 
 ```sh
-cargo run --release -- --audio-file song.mp3
+light-wizard --audio-file song.mp3
 ```
 
 ## Verification
