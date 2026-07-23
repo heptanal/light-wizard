@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub network: NetworkConfig,
     pub player: PlayerConfig,
     pub visualizer: VisualizerConfig,
+    pub color_cycle: ColorCycleConfig,
 }
 
 impl AppConfig {
@@ -25,6 +26,7 @@ impl AppConfig {
         self.network.validate()?;
         self.player.validate()?;
         self.visualizer.validate()?;
+        self.color_cycle.validate()?;
         Ok(())
     }
 
@@ -107,6 +109,88 @@ impl NetworkConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
+pub enum ColorCyclePattern {
+    #[default]
+    Sync,
+    Alternate,
+    Chase,
+}
+
+impl fmt::Display for ColorCyclePattern {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sync => formatter.write_str("sync"),
+            Self::Alternate => formatter.write_str("alternate"),
+            Self::Chase => formatter.write_str("chase"),
+        }
+    }
+}
+
+impl FromStr for ColorCyclePattern {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "sync" => Ok(Self::Sync),
+            "alternate" => Ok(Self::Alternate),
+            "chase" => Ok(Self::Chase),
+            _ => Err("expected 'sync', 'alternate', or 'chase'".into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorCycleConfig {
+    /// Hard color changes per second for each light.
+    pub frequency_hz: f32,
+    /// Hex RGB colors visited in order and wrapped.
+    pub palette: Vec<String>,
+    /// Constant brightness percentage.
+    pub brightness: u8,
+    /// Phase relationship between multiple lights.
+    pub pattern: ColorCyclePattern,
+}
+
+impl Default for ColorCycleConfig {
+    fn default() -> Self {
+        Self {
+            frequency_hz: 10.0,
+            palette: vec![
+                "#ff0000".into(),
+                "#ffff00".into(),
+                "#00ff00".into(),
+                "#00ffff".into(),
+                "#0000ff".into(),
+                "#ff00ff".into(),
+            ],
+            brightness: 100,
+            pattern: ColorCyclePattern::Sync,
+        }
+    }
+}
+
+impl ColorCycleConfig {
+    fn validate(&self) -> Result<()> {
+        if !self.frequency_hz.is_finite() || !(0.1..=30.0).contains(&self.frequency_hz) {
+            bail!("color_cycle.frequency_hz must be between 0.1 and 30");
+        }
+        if self.palette.len() < 2 {
+            bail!("color_cycle.palette must contain at least two colors");
+        }
+        for color in &self.palette {
+            parse_hex_color(color)
+                .with_context(|| format!("invalid color {color:?} in color_cycle.palette"))?;
+        }
+        if !(1..=100).contains(&self.brightness) {
+            bail!("color_cycle.brightness must be between 1 and 100");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum ColorMode {
     #[default]
     Pitch,
@@ -154,6 +238,8 @@ pub struct VisualizerConfig {
     pub beat_threshold: f32,
     pub beat_boost: f32,
     pub beat_cooldown_ms: u64,
+    /// How long the application-controlled brightness boost remains active.
+    pub beat_duration_ms: u64,
     /// Move detected chord-tone colors between lights on each beat.
     pub rotate_colors_on_beat: bool,
     /// How audio chooses colors. Pitch is harmonic; drift is the legacy motion.
@@ -195,6 +281,7 @@ impl Default for VisualizerConfig {
             beat_threshold: 1.25,
             beat_boost: 0.35,
             beat_cooldown_ms: 180,
+            beat_duration_ms: 80,
             rotate_colors_on_beat: true,
             color_mode: ColorMode::Pitch,
             palette: vec![
@@ -264,6 +351,9 @@ impl VisualizerConfig {
         if self.beat_cooldown_ms > 10_000 {
             bail!("visualizer.beat_cooldown_ms must be between 0 and 10000");
         }
+        if !(20..=5_000).contains(&self.beat_duration_ms) {
+            bail!("visualizer.beat_duration_ms must be between 20 and 5000");
+        }
         if self.palette.len() < 2 {
             bail!("visualizer.palette must contain at least two colors");
         }
@@ -323,12 +413,18 @@ mod tests {
         assert_eq!(defaults.visualizer.release_ms, 90.0);
         assert_eq!(defaults.visualizer.beat_threshold, 1.25);
         assert_eq!(defaults.visualizer.beat_boost, 0.35);
+        assert_eq!(defaults.visualizer.beat_duration_ms, 80);
         assert_eq!(defaults.visualizer.pitch_smoothing_ms, 50.0);
         assert_eq!(defaults.visualizer.pitch_min_confidence, 0.10);
         assert!(defaults.visualizer.pulse_on_beat);
         assert_eq!(defaults.visualizer.pulse_delta, 25);
         assert_eq!(defaults.visualizer.pulse_duration_ms, 80);
         assert_eq!(defaults.player.playback_delay_ms, 150);
+        assert_eq!(defaults.color_cycle.frequency_hz, 10.0);
+        assert_eq!(defaults.color_cycle.palette.len(), 6);
+        assert_eq!(defaults.color_cycle.palette[0], "#ff0000");
+        assert_eq!(defaults.color_cycle.brightness, 100);
+        assert_eq!(defaults.color_cycle.pattern, ColorCyclePattern::Sync);
     }
 
     #[test]
@@ -340,6 +436,7 @@ mod tests {
         assert_eq!(decoded.visualizer.fft_size, config.visualizer.fft_size);
         assert_eq!(decoded.visualizer.color_mode, ColorMode::Pitch);
         assert_eq!(decoded.player.playback_delay_ms, 150);
+        assert_eq!(decoded.color_cycle.pattern, ColorCyclePattern::Sync);
     }
 
     #[test]
@@ -355,7 +452,23 @@ mod tests {
         assert_eq!(decoded.visualizer.pitch_smoothing_ms, 50.0);
         assert!(decoded.visualizer.rotate_colors_on_beat);
         assert!(decoded.visualizer.pulse_on_beat);
+        assert_eq!(decoded.visualizer.beat_duration_ms, 80);
         assert_eq!(decoded.player.playback_delay_ms, 150);
+        assert_eq!(decoded.color_cycle.frequency_hz, 10.0);
+        assert_eq!(decoded.color_cycle.pattern, ColorCyclePattern::Sync);
+        decoded.validate().unwrap();
+    }
+
+    #[test]
+    fn native_pulse_can_still_be_enabled_explicitly() {
+        let decoded: AppConfig = toml::from_str(
+            r#"
+                [visualizer]
+                pulse_on_beat = true
+            "#,
+        )
+        .unwrap();
+        assert!(decoded.visualizer.pulse_on_beat);
         decoded.validate().unwrap();
     }
 
@@ -385,7 +498,23 @@ mod tests {
         assert!(config.validate().is_err());
 
         let mut config = AppConfig::default();
+        config.visualizer.beat_duration_ms = 19;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
         config.player.playback_delay_ms = 5_001;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.color_cycle.frequency_hz = 30.1;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.color_cycle.palette.truncate(1);
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.color_cycle.palette[0] = "white".into();
         assert!(config.validate().is_err());
     }
 

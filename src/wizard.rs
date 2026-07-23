@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::config::{AppConfig, ColorMode, parse_hex_color};
+use crate::config::{AppConfig, ColorCyclePattern, ColorMode, parse_hex_color};
 
 pub fn run(initial: AppConfig, output_path: &Path) -> Result<()> {
     let stdin = io::stdin();
@@ -42,11 +42,11 @@ pub fn run(initial: AppConfig, output_path: &Path) -> Result<()> {
         config.save(output_path)?;
         writeln!(writer, "Saved {}.", output_path.display())?;
         if output_path == Path::new("light-wizard.toml") {
-            writeln!(writer, "Start the show with: cargo run --release")?;
+            writeln!(writer, "Start the visualizer with: light-wizard visualizer")?;
         } else {
             writeln!(
                 writer,
-                "Start the show with: cargo run --release -- --config {:?}",
+                "Start the visualizer with: light-wizard --config {:?} visualizer",
                 output_path
             )?;
         }
@@ -285,7 +285,7 @@ fn configure<R: BufRead, W: Write>(
         reader,
         writer,
         "visualizer.beat_boost",
-        "Temporary 0–1 intensity added to a detected beat before brightness smoothing. 0 disables brightness emphasis; 0.35 adds a strong accent.",
+        "Temporary 0–1 intensity added directly to output brightness during the custom beat envelope. It bypasses attack smoothing for a sharper accent; 0 disables brightness emphasis.",
         config.visualizer.beat_boost,
         defaults.visualizer.beat_boost,
         |value| parse_f32_between(value, 0.0, 1.0),
@@ -298,6 +298,15 @@ fn configure<R: BufRead, W: Write>(
         config.visualizer.beat_cooldown_ms,
         defaults.visualizer.beat_cooldown_ms,
         |value| parse_range(value, 0, 10_000),
+    )?;
+    config.visualizer.beat_duration_ms = prompt_value(
+        reader,
+        writer,
+        "visualizer.beat_duration_ms",
+        "How long the application-controlled brightness boost remains active after a detected beat. The ordinary smoothed brightness continues underneath it. Valid range: 20–5000 ms.",
+        config.visualizer.beat_duration_ms,
+        defaults.visualizer.beat_duration_ms,
+        |value| parse_range(value, 20, 5_000),
     )?;
     config.visualizer.rotate_colors_on_beat = prompt_value(
         reader,
@@ -397,7 +406,7 @@ fn configure<R: BufRead, W: Write>(
         reader,
         writer,
         "visualizer.pulse_on_beat",
-        "Send the firmware-native pulse effect in addition to normal color and brightness frames. It creates sharper accents and is enabled by default, though its appearance varies by light model.",
+        "Also send the firmware-native pulse effect on detected beats. This is enabled by default and intentionally stacks with Light Wizard's own timed brightness envelope for sharper accents. Appearance varies by light model.",
         config.visualizer.pulse_on_beat,
         defaults.visualizer.pulse_on_beat,
         parse_bool,
@@ -419,6 +428,49 @@ fn configure<R: BufRead, W: Write>(
         config.visualizer.pulse_duration_ms,
         defaults.visualizer.pulse_duration_ms,
         |value| parse_range(value, 20, 5_000),
+    )?;
+
+    section(
+        writer,
+        "Color-cycle mode",
+        "Color-cycle mode keeps every selected light on and jumps through an independent color spectrum without capturing audio.",
+    )?;
+    config.color_cycle.frequency_hz = prompt_value(
+        reader,
+        writer,
+        "color_cycle.frequency_hz",
+        "Hard color changes per second for each light. High rates are best-effort because bulb firmware and Wi-Fi conditions vary. Rapid changes from 3 through 30 Hz may trigger photosensitive seizures. Valid range: 0.1–30 Hz.",
+        config.color_cycle.frequency_hz,
+        defaults.color_cycle.frequency_hz,
+        |value| parse_f32_between(value, 0.1, 30.0),
+    )?;
+    config.color_cycle.palette = prompt_custom(
+        reader,
+        writer,
+        "color_cycle.palette",
+        "Two or more six-digit RGB colors, separated by commas. The mode jumps through them in order and wraps from the last back to the first.",
+        &config.color_cycle.palette,
+        &defaults.color_cycle.palette,
+        |colors| colors.join(", "),
+        parse_palette,
+    )?;
+    config.color_cycle.brightness = prompt_value(
+        reader,
+        writer,
+        "color_cycle.brightness",
+        "Constant brightness used while colors change. Lights are never deliberately powered off. Valid range: 1–100%.",
+        config.color_cycle.brightness,
+        defaults.color_cycle.brightness,
+        |value| parse_range(value, 1, 100),
+    )?;
+    config.color_cycle.pattern = prompt_value(
+        reader,
+        writer,
+        "color_cycle.pattern",
+        "Palette relationship between lights: sync uses the same color, alternate offsets odd/even lights by half the palette, and chase distributes starting colors across the palette.",
+        config.color_cycle.pattern,
+        defaults.color_cycle.pattern,
+        parse_color_cycle_pattern,
     )?;
 
     Ok(config)
@@ -654,6 +706,10 @@ fn parse_color_mode(input: &str) -> Result<ColorMode> {
     input.parse().map_err(anyhow::Error::msg)
 }
 
+fn parse_color_cycle_pattern(input: &str) -> Result<ColorCyclePattern> {
+    input.parse().map_err(anyhow::Error::msg)
+}
+
 fn parse_ip_list(input: &str) -> Result<Vec<Ipv4Addr>> {
     if input.eq_ignore_ascii_case("auto") || input.eq_ignore_ascii_case("none") {
         return Ok(Vec::new());
@@ -724,7 +780,7 @@ mod tests {
     #[test]
     fn blank_answers_preserve_every_default() {
         let expected = AppConfig::default();
-        let mut input = Cursor::new("\n".repeat(40));
+        let mut input = Cursor::new("\n".repeat(64));
         let mut output = Vec::new();
         let configured = configure(&mut input, &mut output, expected.clone()).unwrap();
         assert_eq!(configured.to_toml().unwrap(), expected.to_toml().unwrap());
@@ -768,5 +824,14 @@ mod tests {
             vec!["#ff0055", "#00aaee"]
         );
         assert!(parse_palette("#ff0055").is_err());
+    }
+
+    #[test]
+    fn color_cycle_pattern_is_case_insensitive() {
+        assert_eq!(
+            parse_color_cycle_pattern("ChAsE").unwrap(),
+            ColorCyclePattern::Chase
+        );
+        assert!(parse_color_cycle_pattern("random").is_err());
     }
 }

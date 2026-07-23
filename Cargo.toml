@@ -2,7 +2,7 @@
 name = "light-wizard"
 version = "0.1.0"
 edition = "2024"
-description = "A synchronized system-audio and file visualizer for WiZ lights"
+description = "A local controller with audio-reactive and custom modes for WiZ lights"
 
 [dependencies]
 anyhow = "1"

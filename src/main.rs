@@ -1,5 +1,6 @@
 mod audio;
 mod cli;
+mod color_cycle;
 mod config;
 mod visualizer;
 mod wiz;
@@ -24,7 +25,7 @@ use crossbeam_channel::bounded;
 
 use crate::{
     audio::{AudioFileMetadata, FilePlayback, PreparedAudioFile, SystemAudioCapture},
-    cli::Cli,
+    cli::{AppCommand, Cli, ColorCycleArgs, LightSelectionArgs, VisualizerArgs},
     config::AppConfig,
     visualizer::{
         AnalysisFrame, LightFrame, PITCH_NAMES, VisualMapper, select_pitch_classes,
@@ -42,47 +43,202 @@ fn main() {
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
-    if cli.print_default_config {
-        print!("{}", AppConfig::default().to_toml()?);
-        return Ok(());
+    let config_path = cli.config.as_deref();
+    match cli.command {
+        AppCommand::DefaultConfig => {
+            print!("{}", AppConfig::default().to_toml()?);
+            Ok(())
+        }
+        AppCommand::Configure => run_configure(config_path),
+        AppCommand::Discover(selection) => run_discover(config_path, &selection),
+        AppCommand::Visualizer(args) => run_visualizer(config_path, args),
+        AppCommand::ColorCycle(args) => run_color_cycle(config_path, args),
     }
-    if cli.config_wizard {
-        let path = cli
-            .config
-            .clone()
-            .unwrap_or_else(|| "light-wizard.toml".into());
-        let initial = if path.is_file() {
-            AppConfig::load(&path)?
-        } else {
-            AppConfig::default()
-        };
-        wizard::run(initial, &path)?;
-        return Ok(());
-    }
+}
 
-    let mut config = load_config(&cli)?;
-    apply_overrides(&mut config, &cli);
+fn run_configure(config_path: Option<&Path>) -> Result<()> {
+    let path = config_path.unwrap_or_else(|| Path::new("light-wizard.toml"));
+    let initial = if path.is_file() {
+        AppConfig::load(path)?
+    } else {
+        AppConfig::default()
+    };
+    wizard::run(initial, path)
+}
+
+fn run_discover(config_path: Option<&Path>, selection: &LightSelectionArgs) -> Result<()> {
+    let mut config = load_config(config_path)?;
+    apply_selection_overrides(&mut config, selection);
     config.validate()?;
 
-    if cli.discover_only {
+    if config.network.lights.is_empty() {
         let lights = discover(
             config.network.port,
             Duration::from_secs_f32(config.network.discovery_seconds),
             &config.network.broadcasts,
         )?;
         print_discovery(&lights);
-        return Ok(());
+    } else {
+        let client = WizClient::new(
+            config.network.port,
+            Duration::from_millis(config.network.request_timeout_ms),
+        )?;
+        let mut lights = configured_lights(&config.network.lights);
+        for light in &mut lights {
+            client.identify(light);
+        }
+        print_discovery(&lights);
     }
+    Ok(())
+}
+
+fn run_visualizer(config_path: Option<&Path>, args: VisualizerArgs) -> Result<()> {
+    let mut config = load_config(config_path)?;
+    apply_selection_overrides(&mut config, &args.selection);
+    apply_visualizer_overrides(&mut config, &args);
+    config.validate()?;
 
     // File and output-device errors are reported before network discovery or
     // light state changes. Constructing this does not start playback.
-    let prepared_file = cli
+    let prepared_file = args
         .audio_file
         .as_deref()
         .map(|path| PreparedAudioFile::open(path, config.player.playback_delay_ms))
         .transpose()?;
 
-    let client = if cli.dry_run {
+    let ModeSetup {
+        client,
+        lights,
+        snapshots,
+        running,
+    } = prepare_mode(&config, args.dry_run)?;
+
+    let result = match prepared_file {
+        Some(prepared) => {
+            run_file_mode(prepared, client.as_ref(), &lights, &config, &running, &args)
+        }
+        None => run_system_audio_mode(client.as_ref(), &lights, &config, &running, &args),
+    };
+    if !args.quiet {
+        println!();
+    }
+    if let Some(client) = &client {
+        restore_states(client, &snapshots);
+    }
+    result
+}
+
+fn run_color_cycle(config_path: Option<&Path>, args: ColorCycleArgs) -> Result<()> {
+    let mut config = load_config(config_path)?;
+    apply_selection_overrides(&mut config, &args.selection);
+    apply_color_cycle_overrides(&mut config, &args);
+    config.validate()?;
+
+    let ModeSetup {
+        client,
+        lights,
+        snapshots,
+        running,
+    } = prepare_mode(&config, args.dry_run)?;
+    println!(
+        "Cycling colors at {:.1} changes per second with {} timing; press Ctrl+C to stop.{}",
+        config.color_cycle.frequency_hz,
+        config.color_cycle.pattern,
+        if args.dry_run { " (dry run)" } else { "" }
+    );
+    if (3.0..=30.0).contains(&config.color_cycle.frequency_hz) {
+        eprintln!(
+            "warning: rapid light color changes in the 3-30 Hz range may trigger photosensitive seizures"
+        );
+    }
+    let result = color_cycle::run(
+        client.as_ref(),
+        &lights,
+        &config.color_cycle,
+        &running,
+        args.quiet,
+    );
+    if !args.quiet {
+        println!();
+    }
+    if let Some(client) = &client {
+        restore_states(client, &snapshots);
+    }
+    result
+}
+
+fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
+    if let Some(path) = config_path {
+        return AppConfig::load(path);
+    }
+    let conventional = Path::new("light-wizard.toml");
+    if conventional.is_file() {
+        AppConfig::load(conventional)
+    } else {
+        Ok(AppConfig::default())
+    }
+}
+
+fn apply_selection_overrides(config: &mut AppConfig, selection: &LightSelectionArgs) {
+    config
+        .network
+        .lights
+        .extend(selection.lights.iter().copied());
+    config.network.lights.sort_unstable();
+    config.network.lights.dedup();
+    config
+        .network
+        .broadcasts
+        .extend(selection.broadcasts.iter().copied());
+    config.network.broadcasts.sort_unstable();
+    config.network.broadcasts.dedup();
+}
+
+fn apply_visualizer_overrides(config: &mut AppConfig, args: &VisualizerArgs) {
+    if let Some(fps) = args.fps {
+        config.visualizer.fps = fps;
+    }
+    if let Some(sensitivity) = args.sensitivity {
+        config.visualizer.sensitivity = sensitivity;
+    }
+    if let Some(palette) = &args.palette {
+        config.visualizer.palette.clone_from(palette);
+    }
+    if let Some(playback_delay_ms) = args.playback_delay_ms {
+        config.player.playback_delay_ms = playback_delay_ms;
+    }
+    if args.no_restore {
+        config.network.restore_state = false;
+    }
+}
+
+fn apply_color_cycle_overrides(config: &mut AppConfig, args: &ColorCycleArgs) {
+    if let Some(frequency_hz) = args.frequency_hz {
+        config.color_cycle.frequency_hz = frequency_hz;
+    }
+    if let Some(palette) = &args.palette {
+        config.color_cycle.palette.clone_from(palette);
+    }
+    if let Some(brightness) = args.brightness {
+        config.color_cycle.brightness = brightness;
+    }
+    if let Some(pattern) = args.pattern {
+        config.color_cycle.pattern = pattern;
+    }
+    if args.no_restore {
+        config.network.restore_state = false;
+    }
+}
+
+struct ModeSetup {
+    client: Option<WizClient>,
+    lights: Vec<WizLight>,
+    snapshots: Vec<StateSnapshot>,
+    running: Arc<AtomicBool>,
+}
+
+fn prepare_mode(config: &AppConfig, dry_run: bool) -> Result<ModeSetup> {
+    let client = if dry_run {
         None
     } else {
         Some(WizClient::new(
@@ -91,7 +247,7 @@ fn run() -> Result<()> {
         )?)
     };
     let mut lights = configured_lights(&config.network.lights);
-    if lights.is_empty() && !cli.dry_run {
+    if lights.is_empty() && !dry_run {
         println!(
             "Searching the local network for WiZ lights for {:.1} seconds...",
             config.network.discovery_seconds
@@ -102,7 +258,7 @@ fn run() -> Result<()> {
             &config.network.broadcasts,
         )?;
     }
-    if lights.is_empty() && !cli.dry_run {
+    if lights.is_empty() && !dry_run {
         bail!(
             "no WiZ lights were discovered; verify that this Mac and the lights are on the same LAN, or pass each address with --light <IP>"
         );
@@ -127,64 +283,16 @@ fn run() -> Result<()> {
     } else {
         Vec::new()
     };
-
     let running = Arc::new(AtomicBool::new(true));
     let signal = Arc::clone(&running);
     ctrlc::set_handler(move || signal.store(false, Ordering::SeqCst))
         .context("failed to install the Ctrl+C handler")?;
-
-    let result = match prepared_file {
-        Some(prepared) => {
-            run_file_mode(prepared, client.as_ref(), &lights, &config, &running, &cli)
-        }
-        None => run_system_audio_mode(client.as_ref(), &lights, &config, &running, &cli),
-    };
-    if !cli.quiet {
-        println!();
-    }
-    if let Some(client) = &client {
-        restore_states(client, &snapshots);
-    }
-    result
-}
-
-fn load_config(cli: &Cli) -> Result<AppConfig> {
-    if let Some(path) = &cli.config {
-        return AppConfig::load(path);
-    }
-    let conventional = Path::new("light-wizard.toml");
-    if conventional.is_file() {
-        AppConfig::load(conventional)
-    } else {
-        Ok(AppConfig::default())
-    }
-}
-
-fn apply_overrides(config: &mut AppConfig, cli: &Cli) {
-    config.network.lights.extend(cli.lights.iter().copied());
-    config.network.lights.sort_unstable();
-    config.network.lights.dedup();
-    config
-        .network
-        .broadcasts
-        .extend(cli.broadcasts.iter().copied());
-    config.network.broadcasts.sort_unstable();
-    config.network.broadcasts.dedup();
-    if let Some(fps) = cli.fps {
-        config.visualizer.fps = fps;
-    }
-    if let Some(sensitivity) = cli.sensitivity {
-        config.visualizer.sensitivity = sensitivity;
-    }
-    if let Some(palette) = &cli.palette {
-        config.visualizer.palette.clone_from(palette);
-    }
-    if let Some(playback_delay_ms) = cli.playback_delay_ms {
-        config.player.playback_delay_ms = playback_delay_ms;
-    }
-    if cli.no_restore {
-        config.network.restore_state = false;
-    }
+    Ok(ModeSetup {
+        client,
+        lights,
+        snapshots,
+        running,
+    })
 }
 
 fn run_system_audio_mode(
@@ -192,7 +300,7 @@ fn run_system_audio_mode(
     lights: &[WizLight],
     config: &AppConfig,
     running: &Arc<AtomicBool>,
-    cli: &Cli,
+    cli: &VisualizerArgs,
 ) -> Result<()> {
     let (sample_sender, sample_receiver) = bounded(6);
     let (analysis_sender, analysis_receiver) = bounded(256);
@@ -247,7 +355,7 @@ fn run_file_mode(
     lights: &[WizLight],
     config: &AppConfig,
     running: &Arc<AtomicBool>,
-    cli: &Cli,
+    cli: &VisualizerArgs,
 ) -> Result<()> {
     let metadata = prepared.metadata().clone();
     print_file_startup(&metadata, config.player.playback_delay_ms, cli.dry_run);
@@ -358,7 +466,7 @@ fn visualization_loop(
     config: &AppConfig,
     analyses: &crossbeam_channel::Receiver<AnalysisFrame>,
     running: &AtomicBool,
-    cli: &Cli,
+    cli: &VisualizerArgs,
     playback: Option<&FilePlayback>,
 ) -> Result<()> {
     let source_name = if playback.is_some() {
@@ -430,6 +538,7 @@ fn visualization_loop(
         }
 
         let now = Instant::now();
+        next_frame = prioritize_beat_frame(next_frame, now, pending_beat);
         if now < next_frame {
             thread::sleep((next_frame - now).min(Duration::from_millis(10)));
             continue;
@@ -477,6 +586,10 @@ fn visualization_loop(
         }
     }
     Ok(())
+}
+
+fn prioritize_beat_frame(next_frame: Instant, now: Instant, pending_beat: bool) -> Instant {
+    if pending_beat { now } else { next_frame }
 }
 
 fn should_finish_file_mode(playback_finished: bool, analysis_disconnected: bool) -> bool {
@@ -547,5 +660,16 @@ mod tests {
     #[test]
     fn duration_display_is_stable() {
         assert_eq!(format_duration(Duration::from_secs(185)), "3:05");
+    }
+
+    #[test]
+    fn pending_beats_render_without_waiting_for_the_regular_deadline() {
+        let now = Instant::now();
+        let regular_deadline = now + Duration::from_millis(33);
+        assert_eq!(prioritize_beat_frame(regular_deadline, now, true), now);
+        assert_eq!(
+            prioritize_beat_frame(regular_deadline, now, false),
+            regular_deadline
+        );
     }
 }

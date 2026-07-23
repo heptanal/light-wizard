@@ -143,16 +143,7 @@ impl WizClient {
     }
 
     pub fn send_pilot_one(&self, light: &WizLight, rgb: [u8; 3], dimming: u8) -> Result<()> {
-        let message = serde_json::to_vec(&json!({
-            "method": "setPilot",
-            "params": {
-                "state": true,
-                "r": rgb[0],
-                "g": rgb[1],
-                "b": rgb[2],
-                "dimming": dimming,
-            }
-        }))?;
+        let message = pilot_message(rgb, dimming)?;
         self.send_to_all(std::slice::from_ref(light), &message)
     }
 
@@ -205,6 +196,19 @@ impl WizClient {
         }
         Ok(())
     }
+}
+
+fn pilot_message(rgb: [u8; 3], dimming: u8) -> Result<Vec<u8>> {
+    Ok(serde_json::to_vec(&json!({
+        "method": "setPilot",
+        "params": {
+            "state": true,
+            "r": rgb[0],
+            "g": rgb[1],
+            "b": rgb[2],
+            "dimming": dimming,
+        },
+    }))?)
 }
 
 pub fn discover(
@@ -393,5 +397,17 @@ mod tests {
         let params = restoration_params(state.as_object().unwrap());
         assert_eq!(params.get("sceneId"), Some(&json!(4)));
         assert!(!params.contains_key("r"));
+    }
+
+    #[test]
+    fn pilot_payload_keeps_the_light_on_and_sets_color() {
+        let payload: Value =
+            serde_json::from_slice(&pilot_message([255, 0, 68], 75).unwrap()).unwrap();
+        assert_eq!(payload["method"], "setPilot");
+        assert_eq!(payload["params"]["state"], true);
+        assert_eq!(payload["params"]["r"], 255);
+        assert_eq!(payload["params"]["g"], 0);
+        assert_eq!(payload["params"]["b"], 68);
+        assert_eq!(payload["params"]["dimming"], 75);
     }
 }

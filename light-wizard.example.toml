@@ -37,6 +37,8 @@ release_ms = 90.0
 beat_threshold = 1.25
 beat_boost = 0.35
 beat_cooldown_ms = 180
+# Duration of Light Wizard's own immediate brightness accent.
+beat_duration_ms = 80
 # Move the current chord-tone colors to the next bulb on every beat.
 rotate_colors_on_beat = true
 
@@ -61,7 +63,20 @@ spatial_spread = 0.14
 # Suppress imperceptibly small network updates.
 change_threshold = 5
 
-# Native WiZ pulse command in addition to normal setPilot animation.
+# Native WiZ pulse in addition to Light Wizard's own beat envelope.
+# Enabled by default; both effects intentionally stack for sharper accents.
 pulse_on_beat = true
 pulse_delta = 25
 pulse_duration_ms = 80
+
+[color_cycle]
+# Hard color changes per second for every light. The upper end is experimental:
+# visible performance varies with bulb firmware and Wi-Fi conditions.
+frequency_hz = 10.0
+# Colors are visited in order without interpolation, then wrapped.
+palette = ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"]
+# Lights remain powered on at this constant brightness.
+brightness = 100
+# "sync" uses one color across all lights, "alternate" offsets odd/even lights,
+# and "chase" distributes starting colors across the palette.
+pattern = "sync"

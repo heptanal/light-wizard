@@ -351,6 +351,7 @@ pub struct VisualMapper {
     started: Instant,
     last_update: Instant,
     smoothed_intensity: f32,
+    beat_until: Option<Instant>,
     held_chroma: [f32; 12],
     pitch_root: Option<usize>,
     candidate_root: Option<usize>,
@@ -373,6 +374,7 @@ impl VisualMapper {
             started: now,
             last_update: now,
             smoothed_intensity: 0.0,
+            beat_until: None,
             held_chroma: [0.0; 12],
             pitch_root: None,
             candidate_root: None,
@@ -382,13 +384,21 @@ impl VisualMapper {
     }
 
     pub fn render(&mut self, analysis: AnalysisFrame, light_count: usize) -> Vec<LightFrame> {
-        let now = Instant::now();
+        self.render_at(analysis, light_count, Instant::now())
+    }
+
+    fn render_at(
+        &mut self,
+        analysis: AnalysisFrame,
+        light_count: usize,
+        now: Instant,
+    ) -> Vec<LightFrame> {
         let delta = now.duration_since(self.last_update).as_secs_f32();
         self.last_update = now;
-        let mut target = analysis.intensity;
         if analysis.beat {
-            target = (target + self.config.beat_boost).min(1.0);
+            self.beat_until = now.checked_add(Duration::from_millis(self.config.beat_duration_ms));
         }
+        let target = analysis.intensity;
         let time_constant = if target > self.smoothed_intensity {
             self.config.attack_ms / 1_000.0
         } else {
@@ -397,9 +407,18 @@ impl VisualMapper {
         let smoothing = 1.0 - (-delta / time_constant.max(0.001)).exp();
         self.smoothed_intensity += (target - self.smoothed_intensity) * smoothing;
 
+        let beat_active = self.beat_until.is_some_and(|until| now < until);
+        if !beat_active {
+            self.beat_until = None;
+        }
+        let output_intensity = if beat_active {
+            (self.smoothed_intensity + self.config.beat_boost).min(1.0)
+        } else {
+            self.smoothed_intensity
+        };
         let brightness_span = self.config.brightness_max - self.config.brightness_min;
         let dimming = (self.config.brightness_min as f32
-            + brightness_span as f32 * self.smoothed_intensity)
+            + brightness_span as f32 * output_intensity)
             .round()
             .clamp(1.0, 100.0) as u8;
         match self.config.color_mode {
@@ -915,6 +934,45 @@ mod tests {
         assert_eq!(after[0].rgb, before[1].rgb);
         assert_eq!(after[1].rgb, before[2].rgb);
         assert_eq!(after[2].rgb, before[0].rgb);
+    }
+
+    #[test]
+    fn custom_beat_envelope_jumps_holds_and_expires_without_changing_smoothing() {
+        let config = VisualizerConfig {
+            brightness_min: 10,
+            brightness_max: 100,
+            beat_boost: 0.5,
+            beat_duration_ms: 80,
+            attack_ms: 1_000.0,
+            ..VisualizerConfig::default()
+        };
+        let mut mapper = VisualMapper::new(&config);
+        let started = mapper.last_update;
+        let beat = AnalysisFrame {
+            intensity: 0.0,
+            beat: true,
+            ..AnalysisFrame::default()
+        };
+
+        let initial = mapper.render_at(beat, 1, started + Duration::from_millis(10));
+        assert_eq!(initial[0].dimming, 55);
+        assert_eq!(mapper.smoothed_intensity, 0.0);
+
+        let held = mapper.render_at(
+            AnalysisFrame::default(),
+            1,
+            started + Duration::from_millis(89),
+        );
+        assert_eq!(held[0].dimming, 55);
+
+        let expired = mapper.render_at(
+            AnalysisFrame::default(),
+            1,
+            started + Duration::from_millis(90),
+        );
+        assert_eq!(expired[0].dimming, 10);
+        assert!(mapper.beat_until.is_none());
+        assert_eq!(mapper.smoothed_intensity, 0.0);
     }
 
     #[test]

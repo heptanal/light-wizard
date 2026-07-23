@@ -1,11 +1,15 @@
 # Light Wizard
 
-Light Wizard is a Rust controller for WiZ lights. It turns either all system
-audio playing on a Mac or one local audio file into a synchronized light show
-over the local network. Audio never leaves the computer.
+Light Wizard is a local Rust controller for WiZ lights with explicit light
+modes. It can turn system audio or a local audio file into a synchronized light
+show, or cycle rapidly through configurable color spectra in ways that are not
+available in the WiZ app. Control stays on the LAN, and captured audio never
+leaves the computer.
 
-The current visualizer includes:
+Current modes and shared capabilities include:
 
+- synchronized, alternate, and chase color cycles from 0.1 through an
+  experimental 30 hard color changes per second;
 - macOS system-output capture through ScreenCaptureKit (no loopback driver);
 - a built-in single-file player for MP3, FLAC, WAV, Ogg Vorbis, Ogg Opus, and
   MP4/AAC;
@@ -33,23 +37,43 @@ The current visualizer includes:
 
 ## Run it
 
-First check LAN discovery without requesting audio permission:
+Running `light-wizard` without a mode shows the command help. First check LAN
+discovery without requesting audio permission:
 
 ```sh
-light-wizard --discover-only
+light-wizard discover
 ```
 
 Then start the visualizer:
 
 ```sh
-light-wizard
+light-wizard visualizer
 ```
 
 Or play and visualize one local file through the default system output device:
 
 ```sh
-light-wizard --audio-file song.mp3
+light-wizard visualizer --audio-file song.mp3
 ```
+
+Or cycle through a custom spectrum at 20 color changes per second:
+
+```sh
+light-wizard color-cycle --frequency-hz 20 \
+  --palette '#ff0044,#00ff88,#2200ff' --brightness 100
+```
+
+Color-cycle mode runs until Ctrl+C and never deliberately powers a light off.
+Each frequency tick jumps to the next palette color without interpolation.
+Its `sync` pattern gives every light the same color, `alternate` offsets odd and
+even lights by half the palette, and `chase` distributes starting colors across
+the palette. Frequency is always measured per light. The upper end of the 30 Hz
+range is best-effort because visible timing depends on bulb firmware and Wi-Fi
+conditions.
+
+> **Photosensitivity warning:** Rapid light changes, especially in the 3–30 Hz
+> range, may trigger seizures. Light Wizard prints a warning before running
+> frequencies in that range.
 
 File mode supports MP3, FLAC, WAV, Ogg Vorbis, mono/stereo Ogg Opus (`.opus`,
 plus Opus streams in `.ogg`), and AAC audio in MP4/M4A containers. It preserves
@@ -66,14 +90,14 @@ built-in default values, validates each answer, and previews the TOML before
 saving it, run:
 
 ```sh
-light-wizard --config-wizard
+light-wizard configure
 ```
 
 The wizard writes `light-wizard.toml`. To create or edit another file, combine
 it with `--config`, for example:
 
 ```sh
-light-wizard --config studio.toml --config-wizard
+light-wizard --config studio.toml configure
 ```
 
 macOS should request Screen & System Audio Recording permission on the first
@@ -86,37 +110,61 @@ If broadcast discovery is blocked by the router or a VPN, provide the light
 addresses directly:
 
 ```sh
-light-wizard --light 192.168.1.41 --light 192.168.1.42
+light-wizard visualizer \
+  --light 192.168.1.41 --light 192.168.1.42
 ```
 
 MAC addresses are learned from `getPilot` replies and are not required. A
-directed broadcast can also be added with `--broadcast 192.168.1.255`.
+directed broadcast can also be added to a mode or `discover` with
+`--broadcast 192.168.1.255`.
 
 Useful experiments:
 
 ```sh
 # Verify capture and analysis without touching any lights
-light-wizard --dry-run
+light-wizard visualizer --dry-run
 
 # Play a file and print its analysis without discovering or controlling lights
-light-wizard --audio-file song.flac --dry-run
+light-wizard visualizer --audio-file song.flac --dry-run
+
+# Preview color-cycle timing without discovering or controlling lights
+light-wizard color-cycle --frequency-hz 15 --pattern alternate --dry-run
 
 # More sensitive, lower-traffic, two-color pitch wheel
-light-wizard --sensitivity 1.8 --fps 20 \
+light-wizard visualizer --sensitivity 1.8 --fps 20 \
   --palette '#ff0055,#0055ff'
 
 # Print every supported setting
-light-wizard --print-default-config
+light-wizard default-config
 ```
 
-Run `light-wizard --help` for all command-line overrides.
+Run `light-wizard --help` for the mode list or
+`light-wizard <mode> --help` for its overrides.
 
 ## Configuration
 
 Copy [`light-wizard.example.toml`](light-wizard.example.toml) to
 `light-wizard.toml`. That filename is loaded automatically from the current
 directory, or another file can be selected with `--config path/to/file.toml`.
-Command-line values override the file.
+Command-line values override the file. Existing configurations without a
+`[color_cycle]` section receive the built-in rainbow defaults.
+
+### Color-cycle configuration
+
+The `[color_cycle]` section controls:
+
+- `frequency_hz`: hard color changes per second for every light, from 0.1 to 30;
+- `palette`: two or more RGB colors visited in order and wrapped;
+- `brightness`: constant brightness while every light remains powered on;
+- `pattern`: `sync`, `alternate`, or `chase`.
+
+Every pattern preserves the selected frequency for each bulb. The latter two
+patterns only change palette offsets. Lights use stable IP ordering to determine
+their alternate/chase positions. Previous power, color/temperature or scene,
+and brightness are restored after Ctrl+C by default; `--no-restore` leaves the
+last color active.
+
+### Visualizer configuration
 
 The main tuning controls are:
 
@@ -136,7 +184,8 @@ The main tuning controls are:
   each beat. Single-light setups retain their blended chord color;
 - `color_speed`, `color_influence`, and `spatial_spread`: control only the
   legacy `drift` mode;
-- `beat_threshold` and `beat_boost`: tune adaptive transient detection;
+- `beat_threshold` tunes adaptive detection; `beat_boost` and
+  `beat_duration_ms` tune the custom brightness accent;
 - `fps`: caps WiZ network updates. The default is the supported maximum of 30
   FPS for responsive harmonic and beat motion, while change suppression avoids
   resending imperceptibly small changes. Lower values reduce Wi-Fi traffic;
@@ -163,10 +212,12 @@ can auto-calibrate this value. Wi-Fi conditions, bulb processing, Rodio's
 output buffer (roughly 100 ms by default), and the selected audio device all
 contribute latency.
 
-`pulse_on_beat` is on by default, so detected beats also emit WiZ's native
-`pulse` command for sharper accents. Ordinary color/brightness animation uses
-`setPilot`; disable `pulse_on_beat` if a particular light model handles the
-native effect poorly.
+Detected beats bypass the ordinary frame deadline and start Light Wizard's own
+brightness envelope. `beat_boost` sets its normalized brightness jump and
+`beat_duration_ms` controls how long it remains active; ordinary attack/release
+smoothing continues underneath it. `pulse_on_beat` is on by default and also
+emits WiZ's firmware-native `pulse` command. The two effects intentionally
+stack for sharper accents, though native behavior can vary by light model.
 
 The live terminal meter reports detected note names after `N`, followed by
 tonal confidence, output RGB, and brightness. A `~` marks an uncertain but
@@ -177,7 +228,7 @@ to tune pitch settings without sending anything to the lights. In file mode,
 A manual macOS playback test is:
 
 ```sh
-light-wizard --audio-file song.mp3
+light-wizard visualizer --audio-file song.mp3
 ```
 
 ## Verification
@@ -192,4 +243,6 @@ The application has unit coverage for incremental Ogg Opus decoding, exact
 file delay and EOF draining, native-rate duration, stereo downmix, bounded
 streaming memory, configuration and CLI compatibility, all twelve pitch
 classes, chord color behavior, FFT analysis, discovery broadcast math, audio
-sample conversion, and safe restoration of RGB/temperature/scene states.
+sample conversion, color-cycle palette scheduling and WiZ payloads, custom beat
+envelopes, and safe
+restoration of RGB/temperature/scene states.
