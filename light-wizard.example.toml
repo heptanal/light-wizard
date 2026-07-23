@@ -69,6 +69,31 @@ pulse_on_beat = true
 pulse_delta = 25
 pulse_duration_ms = 80
 
+[input_reactive]
+# Maximum WiZ updates per second. Key presses and clicks are accumulated
+# between frames; auto-repeat, releases, scrolling, and mouse movement are
+# ignored.
+fps = 30
+# Colors are smoothly interpolated and wrap back to the beginning.
+palette = ["#ff2a68", "#7b2cff", "#008cff", "#00e5b0", "#ffd43b"]
+# Recent host-input activity maps across this brightness range. The lights
+# remain powered on at brightness_min while idle.
+brightness_min = 8
+brightness_max = 100
+# Normalized energy contributed by one event.
+key_boost = 0.12
+click_boost = 0.25
+# Exponential activity-decay time.
+release_ms = 350.0
+# Idle palette speed plus additional speed at maximum activity, in palette
+# revolutions per second.
+color_speed = 0.035
+activity_color_speed = 0.35
+# Palette offset between adjacent lights, in revolutions.
+spatial_spread = 0.14
+# Suppress imperceptibly small color updates.
+change_threshold = 5
+
 [color_cycle]
 # Hard color changes per second for every light. The upper end is experimental:
 # visible performance varies with bulb firmware and Wi-Fi conditions.

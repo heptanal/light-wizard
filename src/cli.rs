@@ -23,6 +23,10 @@ pub enum AppCommand {
     /// Turn system audio or a local audio file into a WiZ light show.
     Visualizer(VisualizerArgs),
 
+    /// React to this Mac's key presses and mouse clicks with light and color.
+    #[command(name = "input-reactive")]
+    InputReactive(InputReactiveArgs),
+
     /// Cycle WiZ lights through configurable colors at a fixed frequency.
     #[command(name = "color-cycle")]
     ColorCycle(ColorCycleArgs),
@@ -126,6 +130,32 @@ pub struct ColorCycleArgs {
     pub quiet: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct InputReactiveArgs {
+    #[command(flatten)]
+    pub selection: LightSelectionArgs,
+
+    /// Override input-reactive network frames per second (1-30).
+    #[arg(long)]
+    pub fps: Option<u32>,
+
+    /// Override the palette with comma-separated hex colors.
+    #[arg(long, value_delimiter = ',')]
+    pub palette: Option<Vec<String>>,
+
+    /// Observe input and print activity without discovering or controlling lights.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Leave the input-reactive mode's final light state active on exit.
+    #[arg(long)]
+    pub no_restore: bool,
+
+    /// Suppress the continuously updated terminal activity meter.
+    #[arg(long, short)]
+    pub quiet: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, error::ErrorKind};
@@ -219,6 +249,33 @@ mod tests {
         );
         assert_eq!(args.brightness, Some(75));
         assert_eq!(args.pattern, Some(ColorCyclePattern::Alternate));
+    }
+
+    #[test]
+    fn parses_input_reactive_overrides() {
+        let cli = Cli::try_parse_from([
+            "light-wizard",
+            "input-reactive",
+            "--fps",
+            "20",
+            "--palette",
+            "#ff0044,#00ff88,#2200ff",
+            "--dry-run",
+        ])
+        .unwrap();
+        let AppCommand::InputReactive(args) = cli.command else {
+            panic!("expected input-reactive command");
+        };
+        assert_eq!(args.fps, Some(20));
+        assert_eq!(
+            args.palette,
+            Some(vec![
+                "#ff0044".to_owned(),
+                "#00ff88".to_owned(),
+                "#2200ff".to_owned()
+            ])
+        );
+        assert!(args.dry_run);
     }
 
     #[test]

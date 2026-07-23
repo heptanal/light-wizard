@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub network: NetworkConfig,
     pub player: PlayerConfig,
     pub visualizer: VisualizerConfig,
+    pub input_reactive: InputReactiveConfig,
     pub color_cycle: ColorCycleConfig,
 }
 
@@ -26,6 +27,7 @@ impl AppConfig {
         self.network.validate()?;
         self.player.validate()?;
         self.visualizer.validate()?;
+        self.input_reactive.validate()?;
         self.color_cycle.validate()?;
         Ok(())
     }
@@ -102,6 +104,97 @@ impl NetworkConfig {
         }
         if !(50..=10_000).contains(&self.request_timeout_ms) {
             bail!("network.request_timeout_ms must be between 50 and 10000");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InputReactiveConfig {
+    /// Maximum light-network updates per second.
+    pub fps: u32,
+    /// Hex RGB colors interpolated in order and wrapped.
+    pub palette: Vec<String>,
+    /// Brightness at zero and maximum recent input activity.
+    pub brightness_min: u8,
+    pub brightness_max: u8,
+    /// Normalized energy added by one non-repeating key press or mouse click.
+    pub key_boost: f32,
+    pub click_boost: f32,
+    /// Exponential energy decay time constant.
+    pub release_ms: f32,
+    /// Idle palette revolutions per second.
+    pub color_speed: f32,
+    /// Additional palette revolutions per second at maximum activity.
+    pub activity_color_speed: f32,
+    /// Palette offset between adjacent lights, in revolutions.
+    pub spatial_spread: f32,
+    /// Minimum aggregate RGB change before sending another update.
+    pub change_threshold: u16,
+}
+
+impl Default for InputReactiveConfig {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            palette: vec![
+                "#ff2a68".into(),
+                "#7b2cff".into(),
+                "#008cff".into(),
+                "#00e5b0".into(),
+                "#ffd43b".into(),
+            ],
+            brightness_min: 8,
+            brightness_max: 100,
+            key_boost: 0.12,
+            click_boost: 0.25,
+            release_ms: 350.0,
+            color_speed: 0.035,
+            activity_color_speed: 0.35,
+            spatial_spread: 0.14,
+            change_threshold: 5,
+        }
+    }
+}
+
+impl InputReactiveConfig {
+    fn validate(&self) -> Result<()> {
+        if !(1..=30).contains(&self.fps) {
+            bail!("input_reactive.fps must be between 1 and 30");
+        }
+        if self.palette.len() < 2 {
+            bail!("input_reactive.palette must contain at least two colors");
+        }
+        for color in &self.palette {
+            parse_hex_color(color)
+                .with_context(|| format!("invalid color {color:?} in input_reactive.palette"))?;
+        }
+        if !(1..=100).contains(&self.brightness_min)
+            || !(1..=100).contains(&self.brightness_max)
+            || self.brightness_min > self.brightness_max
+        {
+            bail!("input_reactive brightness must satisfy 1 <= min <= max <= 100");
+        }
+        if !self.key_boost.is_finite()
+            || !self.click_boost.is_finite()
+            || !(0.0..=1.0).contains(&self.key_boost)
+            || !(0.0..=1.0).contains(&self.click_boost)
+        {
+            bail!("input_reactive key_boost and click_boost must be between 0 and 1");
+        }
+        if !self.release_ms.is_finite() || !(20.0..=10_000.0).contains(&self.release_ms) {
+            bail!("input_reactive.release_ms must be between 20 and 10000");
+        }
+        if !self.color_speed.is_finite()
+            || !self.activity_color_speed.is_finite()
+            || self.color_speed < 0.0
+            || self.activity_color_speed < 0.0
+            || !self.spatial_spread.is_finite()
+        {
+            bail!(
+                "input_reactive color speeds must be non-negative and spatial_spread must be finite"
+            );
         }
         Ok(())
     }
@@ -420,6 +513,12 @@ mod tests {
         assert_eq!(defaults.visualizer.pulse_delta, 25);
         assert_eq!(defaults.visualizer.pulse_duration_ms, 80);
         assert_eq!(defaults.player.playback_delay_ms, 150);
+        assert_eq!(defaults.input_reactive.fps, 30);
+        assert_eq!(defaults.input_reactive.key_boost, 0.12);
+        assert_eq!(defaults.input_reactive.click_boost, 0.25);
+        assert_eq!(defaults.input_reactive.release_ms, 350.0);
+        assert_eq!(defaults.input_reactive.brightness_min, 8);
+        assert_eq!(defaults.input_reactive.brightness_max, 100);
         assert_eq!(defaults.color_cycle.frequency_hz, 10.0);
         assert_eq!(defaults.color_cycle.palette.len(), 6);
         assert_eq!(defaults.color_cycle.palette[0], "#ff0000");
@@ -436,6 +535,7 @@ mod tests {
         assert_eq!(decoded.visualizer.fft_size, config.visualizer.fft_size);
         assert_eq!(decoded.visualizer.color_mode, ColorMode::Pitch);
         assert_eq!(decoded.player.playback_delay_ms, 150);
+        assert_eq!(decoded.input_reactive.fps, 30);
         assert_eq!(decoded.color_cycle.pattern, ColorCyclePattern::Sync);
     }
 
@@ -454,6 +554,7 @@ mod tests {
         assert!(decoded.visualizer.pulse_on_beat);
         assert_eq!(decoded.visualizer.beat_duration_ms, 80);
         assert_eq!(decoded.player.playback_delay_ms, 150);
+        assert_eq!(decoded.input_reactive.release_ms, 350.0);
         assert_eq!(decoded.color_cycle.frequency_hz, 10.0);
         assert_eq!(decoded.color_cycle.pattern, ColorCyclePattern::Sync);
         decoded.validate().unwrap();
@@ -503,6 +604,18 @@ mod tests {
 
         let mut config = AppConfig::default();
         config.player.playback_delay_ms = 5_001;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.input_reactive.release_ms = 19.0;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.input_reactive.key_boost = 1.1;
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.input_reactive.palette.truncate(1);
         assert!(config.validate().is_err());
 
         let mut config = AppConfig::default();

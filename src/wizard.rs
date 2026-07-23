@@ -432,6 +432,121 @@ fn configure<R: BufRead, W: Write>(
 
     section(
         writer,
+        "Input-reactive mode",
+        "Input-reactive mode observes anonymous key presses and mouse clicks on this Mac, then maps recent activity to brightness and palette motion.",
+    )?;
+    config.input_reactive.fps = prompt_value(
+        reader,
+        writer,
+        "input_reactive.fps",
+        "Maximum WiZ light-network updates per second. Input events are accumulated between frames, and unchanged outputs are suppressed. Valid range: 1–30.",
+        config.input_reactive.fps,
+        defaults.input_reactive.fps,
+        |value| parse_range(value, 1, 30),
+    )?;
+    config.input_reactive.palette = prompt_custom(
+        reader,
+        writer,
+        "input_reactive.palette",
+        "Two or more six-digit RGB colors, separated by commas. Colors are smoothly interpolated and wrap from the last back to the first.",
+        &config.input_reactive.palette,
+        &defaults.input_reactive.palette,
+        |colors| colors.join(", "),
+        parse_palette,
+    )?;
+    config.input_reactive.brightness_min = prompt_value(
+        reader,
+        writer,
+        "input_reactive.brightness_min",
+        "Ambient brightness while there has been no recent input. Lights remain powered on. Valid range: 1–100.",
+        config.input_reactive.brightness_min,
+        defaults.input_reactive.brightness_min,
+        |value| parse_range(value, 1, 100),
+    )?;
+    let input_brightness_min = config.input_reactive.brightness_min;
+    config.input_reactive.brightness_max = prompt_value_validated(
+        reader,
+        writer,
+        "input_reactive.brightness_max",
+        "Brightness at maximum recent input activity. It must be at least brightness_min and no greater than 100.",
+        config.input_reactive.brightness_max,
+        defaults.input_reactive.brightness_max,
+        |value| parse_range(value, 1, 100),
+        move |value| {
+            if *value < input_brightness_min {
+                bail!(
+                    "brightness_max must be at least the selected brightness_min ({input_brightness_min})"
+                );
+            }
+            Ok(())
+        },
+    )?;
+    config.input_reactive.key_boost = prompt_value(
+        reader,
+        writer,
+        "input_reactive.key_boost",
+        "Normalized activity added by one non-repeating key press. Larger values make typing reach full brightness with fewer presses. Valid range: 0–1.",
+        config.input_reactive.key_boost,
+        defaults.input_reactive.key_boost,
+        |value| parse_f32_between(value, 0.0, 1.0),
+    )?;
+    config.input_reactive.click_boost = prompt_value(
+        reader,
+        writer,
+        "input_reactive.click_boost",
+        "Normalized activity added by one mouse-button click. Larger values make clicks more visually emphatic. Valid range: 0–1.",
+        config.input_reactive.click_boost,
+        defaults.input_reactive.click_boost,
+        |value| parse_f32_between(value, 0.0, 1.0),
+    )?;
+    config.input_reactive.release_ms = prompt_value(
+        reader,
+        writer,
+        "input_reactive.release_ms",
+        "Exponential decay time for recent input energy. Short values feel percussive; long values turn sustained typing into a continuous glow. Valid range: 20–10000 ms.",
+        config.input_reactive.release_ms,
+        defaults.input_reactive.release_ms,
+        |value| parse_f32_between(value, 20.0, 10_000.0),
+    )?;
+    config.input_reactive.color_speed = prompt_value(
+        reader,
+        writer,
+        "input_reactive.color_speed",
+        "Idle palette revolutions per second. 0 holds the ambient color until activity changes the speed. Must be non-negative.",
+        config.input_reactive.color_speed,
+        defaults.input_reactive.color_speed,
+        parse_non_negative_f32,
+    )?;
+    config.input_reactive.activity_color_speed = prompt_value(
+        reader,
+        writer,
+        "input_reactive.activity_color_speed",
+        "Additional palette revolutions per second at full activity. It scales continuously with recent input energy and must be non-negative.",
+        config.input_reactive.activity_color_speed,
+        defaults.input_reactive.activity_color_speed,
+        parse_non_negative_f32,
+    )?;
+    config.input_reactive.spatial_spread = prompt_value(
+        reader,
+        writer,
+        "input_reactive.spatial_spread",
+        "Palette offset between adjacent lights, measured in revolutions. Negative values reverse the order; 0 keeps all lights the same color.",
+        config.input_reactive.spatial_spread,
+        defaults.input_reactive.spatial_spread,
+        parse_finite_f32,
+    )?;
+    config.input_reactive.change_threshold = prompt_value(
+        reader,
+        writer,
+        "input_reactive.change_threshold",
+        "Minimum summed RGB-channel difference before another frame is sent. Brightness changes of 2% send independently, and unchanged lights receive a keepalive every two seconds.",
+        config.input_reactive.change_threshold,
+        defaults.input_reactive.change_threshold,
+        |value| parse_range(value, 0, u16::MAX),
+    )?;
+
+    section(
+        writer,
         "Color-cycle mode",
         "Color-cycle mode keeps every selected light on and jumps through an independent color spectrum without capturing audio.",
     )?;
@@ -674,6 +789,14 @@ fn parse_positive_f32(input: &str) -> Result<f32> {
     let value = parse_finite_f32(input)?;
     if value <= 0.0 {
         bail!("the number must be greater than zero");
+    }
+    Ok(value)
+}
+
+fn parse_non_negative_f32(input: &str) -> Result<f32> {
+    let value = parse_finite_f32(input)?;
+    if value < 0.0 {
+        bail!("the number must be zero or greater");
     }
     Ok(value)
 }

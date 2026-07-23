@@ -2,6 +2,7 @@ mod audio;
 mod cli;
 mod color_cycle;
 mod config;
+mod input_reactive;
 mod visualizer;
 mod wiz;
 mod wizard;
@@ -25,7 +26,7 @@ use crossbeam_channel::bounded;
 
 use crate::{
     audio::{AudioFileMetadata, FilePlayback, PreparedAudioFile, SystemAudioCapture},
-    cli::{AppCommand, Cli, ColorCycleArgs, LightSelectionArgs, VisualizerArgs},
+    cli::{AppCommand, Cli, ColorCycleArgs, InputReactiveArgs, LightSelectionArgs, VisualizerArgs},
     config::AppConfig,
     visualizer::{
         AnalysisFrame, LightFrame, PITCH_NAMES, VisualMapper, select_pitch_classes,
@@ -52,6 +53,7 @@ fn run() -> Result<()> {
         AppCommand::Configure => run_configure(config_path),
         AppCommand::Discover(selection) => run_discover(config_path, &selection),
         AppCommand::Visualizer(args) => run_visualizer(config_path, args),
+        AppCommand::InputReactive(args) => run_input_reactive(config_path, args),
         AppCommand::ColorCycle(args) => run_color_cycle(config_path, args),
     }
 }
@@ -71,24 +73,23 @@ fn run_discover(config_path: Option<&Path>, selection: &LightSelectionArgs) -> R
     apply_selection_overrides(&mut config, selection);
     config.validate()?;
 
-    if config.network.lights.is_empty() {
-        let lights = discover(
+    let mut lights = if config.network.lights.is_empty() {
+        discover(
             config.network.port,
             Duration::from_secs_f32(config.network.discovery_seconds),
             &config.network.broadcasts,
-        )?;
-        print_discovery(&lights);
+        )?
     } else {
-        let client = WizClient::new(
-            config.network.port,
-            Duration::from_millis(config.network.request_timeout_ms),
-        )?;
-        let mut lights = configured_lights(&config.network.lights);
-        for light in &mut lights {
-            client.identify(light);
-        }
-        print_discovery(&lights);
+        configured_lights(&config.network.lights)
+    };
+    let client = WizClient::new(
+        config.network.port,
+        Duration::from_millis(config.network.request_timeout_ms),
+    )?;
+    for light in &mut lights {
+        client.inspect_system(light);
     }
+    print_discovery(&lights);
     Ok(())
 }
 
@@ -167,6 +168,46 @@ fn run_color_cycle(config_path: Option<&Path>, args: ColorCycleArgs) -> Result<(
     result
 }
 
+fn run_input_reactive(config_path: Option<&Path>, args: InputReactiveArgs) -> Result<()> {
+    let mut config = load_config(config_path)?;
+    apply_selection_overrides(&mut config, &args.selection);
+    apply_input_reactive_overrides(&mut config, &args);
+    config.validate()?;
+
+    // Ask for privacy permission before waiting on discovery or reading light
+    // state so a denied mode fails without touching the LAN.
+    input_reactive::HostInputCapture::ensure_access()?;
+    let ModeSetup {
+        client,
+        lights,
+        snapshots,
+        running,
+    } = prepare_mode(&config, args.dry_run)?;
+    let (event_sender, event_receiver) = bounded(1_024);
+    let capture = input_reactive::HostInputCapture::start(event_sender, Arc::clone(&running))?;
+    println!(
+        "Reacting to non-repeating key presses and mouse clicks; press Ctrl+C to stop.{}",
+        if args.dry_run { " (dry run)" } else { "" }
+    );
+    let result = input_reactive::run(
+        client.as_ref(),
+        &lights,
+        &config.input_reactive,
+        &event_receiver,
+        &running,
+        args.quiet,
+    );
+    running.store(false, Ordering::Relaxed);
+    drop(capture);
+    if !args.quiet {
+        println!();
+    }
+    if let Some(client) = &client {
+        restore_states(client, &snapshots);
+    }
+    result
+}
+
 fn load_config(config_path: Option<&Path>) -> Result<AppConfig> {
     if let Some(path) = config_path {
         return AppConfig::load(path);
@@ -224,6 +265,18 @@ fn apply_color_cycle_overrides(config: &mut AppConfig, args: &ColorCycleArgs) {
     }
     if let Some(pattern) = args.pattern {
         config.color_cycle.pattern = pattern;
+    }
+    if args.no_restore {
+        config.network.restore_state = false;
+    }
+}
+
+fn apply_input_reactive_overrides(config: &mut AppConfig, args: &InputReactiveArgs) {
+    if let Some(fps) = args.fps {
+        config.input_reactive.fps = fps;
+    }
+    if let Some(palette) = &args.palette {
+        config.input_reactive.palette.clone_from(palette);
     }
     if args.no_restore {
         config.network.restore_state = false;
@@ -428,7 +481,12 @@ fn configured_lights(addresses: &[Ipv4Addr]) -> Vec<WizLight> {
         .copied()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(|ip| WizLight { ip, mac: None })
+        .map(|ip| WizLight {
+            ip,
+            mac: None,
+            module_name: None,
+            firmware_version: None,
+        })
         .collect()
 }
 

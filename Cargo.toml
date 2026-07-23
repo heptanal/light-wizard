@@ -19,4 +19,6 @@ symphonia-adapter-libopus = "0.2.9"
 toml = "1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+core-graphics = "0.25"
 screencapturekit = { version = "8", features = ["macos_13_0"] }

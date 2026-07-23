@@ -14,13 +14,26 @@ use serde_json::{Map, Value, json};
 pub struct WizLight {
     pub ip: Ipv4Addr,
     pub mac: Option<String>,
+    pub module_name: Option<String>,
+    pub firmware_version: Option<String>,
 }
 
 impl WizLight {
     pub fn display_name(&self) -> String {
-        match &self.mac {
-            Some(mac) => format!("{} ({mac})", self.ip),
-            None => self.ip.to_string(),
+        let mut details = Vec::new();
+        if let Some(mac) = &self.mac {
+            details.push(format!("MAC {mac}"));
+        }
+        if let Some(module_name) = &self.module_name {
+            details.push(format!("module {module_name}"));
+        }
+        if let Some(firmware_version) = &self.firmware_version {
+            details.push(format!("firmware {firmware_version}"));
+        }
+        if details.is_empty() {
+            self.ip.to_string()
+        } else {
+            format!("{} ({})", self.ip, details.join(", "))
         }
     }
 }
@@ -73,6 +86,17 @@ impl WizClient {
                 .get("mac")
                 .and_then(Value::as_str)
                 .map(normalize_mac);
+        }
+    }
+
+    /// Enrich discovery output with system information when the firmware
+    /// exposes it. A missing or unsupported method is deliberately harmless.
+    pub fn inspect_system(&self, light: &mut WizLight) {
+        if let Ok(result) = self.request(light.ip, "getSystemConfig", json!({})) {
+            apply_system_identity(light, &result);
+        }
+        if light.mac.is_none() {
+            self.identify(light);
         }
     }
 
@@ -269,11 +293,15 @@ pub fn discover(
                 if response.get("method").and_then(Value::as_str) != Some("registration") {
                     continue;
                 }
-                let mac = response
-                    .pointer("/result/mac")
-                    .and_then(Value::as_str)
-                    .map(normalize_mac);
-                found.insert(ip, WizLight { ip, mac });
+                let result = response.get("result").unwrap_or(&Value::Null);
+                let mut light = WizLight {
+                    ip,
+                    mac: None,
+                    module_name: None,
+                    firmware_version: None,
+                };
+                apply_system_identity(&mut light, result);
+                found.insert(ip, light);
             }
             Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
             Err(error) => {
@@ -316,6 +344,18 @@ fn normalize_mac(mac: &str) -> String {
         .filter(|character| character.is_ascii_hexdigit())
         .flat_map(char::to_lowercase)
         .collect()
+}
+
+fn apply_system_identity(light: &mut WizLight, result: &Value) {
+    if let Some(mac) = result.get("mac").and_then(Value::as_str) {
+        light.mac = Some(normalize_mac(mac));
+    }
+    if let Some(module_name) = result.get("moduleName").and_then(Value::as_str) {
+        light.module_name = Some(module_name.to_owned());
+    }
+    if let Some(firmware_version) = result.get("fwVersion").and_then(Value::as_str) {
+        light.firmware_version = Some(firmware_version.to_owned());
+    }
 }
 
 fn restoration_params(state: &Map<String, Value>) -> Map<String, Value> {
@@ -409,5 +449,41 @@ mod tests {
         assert_eq!(payload["params"]["g"], 0);
         assert_eq!(payload["params"]["b"], 68);
         assert_eq!(payload["params"]["dimming"], 75);
+    }
+
+    #[test]
+    fn system_identity_extracts_module_firmware_and_normalized_mac() {
+        let mut light = WizLight {
+            ip: Ipv4Addr::new(192, 168, 1, 42),
+            mac: None,
+            module_name: None,
+            firmware_version: None,
+        };
+        apply_system_identity(
+            &mut light,
+            &json!({
+                "mac": "A8:BB:50:00:11:22",
+                "moduleName": "ESP03_SHRGB1W_01",
+                "fwVersion": "1.24.0"
+            }),
+        );
+        assert_eq!(light.mac.as_deref(), Some("a8bb50001122"));
+        assert_eq!(light.module_name.as_deref(), Some("ESP03_SHRGB1W_01"));
+        assert_eq!(light.firmware_version.as_deref(), Some("1.24.0"));
+        assert_eq!(
+            light.display_name(),
+            "192.168.1.42 (MAC a8bb50001122, module ESP03_SHRGB1W_01, firmware 1.24.0)"
+        );
+    }
+
+    #[test]
+    fn partial_identity_display_omits_missing_fields() {
+        let light = WizLight {
+            ip: Ipv4Addr::new(192, 168, 1, 43),
+            mac: None,
+            module_name: Some("ESP01_SHDW_01".into()),
+            firmware_version: None,
+        };
+        assert_eq!(light.display_name(), "192.168.1.43 (module ESP01_SHDW_01)");
     }
 }

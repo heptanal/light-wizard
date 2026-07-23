@@ -2,18 +2,22 @@
 
 Light Wizard is a local Rust controller for WiZ lights with explicit light
 modes. It can turn system audio or a local audio file into a synchronized light
-show, or cycle rapidly through configurable color spectra in ways that are not
-available in the WiZ app. Control stays on the LAN, and captured audio never
-leaves the computer.
+show, react to this Mac's key presses and mouse clicks, or cycle rapidly through
+configurable color spectra in ways that are not available in the WiZ app.
+Control stays on the LAN, and captured audio and input activity never leave the
+computer.
 
 Current modes and shared capabilities include:
 
 - synchronized, alternate, and chase color cycles from 0.1 through an
   experimental 30 hard color changes per second;
+- input-reactive brightness and palette motion driven by anonymous key presses
+  and mouse clicks;
 - macOS system-output capture through ScreenCaptureKit (no loopback driver);
 - a built-in single-file player for MP3, FLAC, WAV, Ogg Vorbis, Ogg Opus, and
   MP4/AAC;
-- LAN discovery and explicit-IP fallback for WiZ lights;
+- LAN discovery and explicit-IP fallback for WiZ lights, with best-effort
+  firmware module/version reporting;
 - RMS volume, FFT bass/mid/treble analysis, 12-note chroma analysis, and
   adaptive beat detection;
 - continuously tracked pitch-class colors, chord tones distributed across
@@ -33,7 +37,8 @@ Current modes and shared capabilities include:
 - a Rust toolchain (`rustup` is recommended);
 - WiZ lights and the Mac on the same IPv4 LAN;
 - Screen & System Audio Recording permission for system-audio mode. File mode
-  does not use ScreenCaptureKit and does not require that permission.
+  does not use ScreenCaptureKit and does not require that permission;
+- Input Monitoring permission for `input-reactive` mode.
 
 ## Run it
 
@@ -62,6 +67,19 @@ Or cycle through a custom spectrum at 20 color changes per second:
 light-wizard color-cycle --frequency-hz 20 \
   --palette '#ff0044,#00ff88,#2200ff' --brightness 100
 ```
+
+Or turn typing and clicking activity into ambient light:
+
+```sh
+light-wizard input-reactive
+```
+
+Input-reactive mode keeps the lights on at a configurable ambient brightness.
+Each non-repeating key press or mouse-button click adds activity energy; that
+energy decays smoothly, controls brightness, and accelerates motion through the
+palette. Key releases, key auto-repeat, typed characters, scrolling, cursor
+movement, and the active application are never collected. The terminal only
+shows aggregate event counts.
 
 Color-cycle mode runs until Ctrl+C and never deliberately powers a light off.
 Each frequency tick jumps to the next palette color without interpolation.
@@ -106,6 +124,11 @@ terminal and run the command again. Play some audio and press Ctrl+C to stop;
 by default, Light Wizard restores the state it read from each light before the
 show. The built-in file player never requests this permission.
 
+The first `input-reactive` run requests macOS Input Monitoring permission. If
+macOS does not immediately activate the event tap, enable the terminal or Light
+Wizard under System Settings > Privacy & Security > Input Monitoring, restart
+it, and run the mode again.
+
 If broadcast discovery is blocked by the router or a VPN, provide the light
 addresses directly:
 
@@ -114,7 +137,11 @@ light-wizard visualizer \
   --light 192.168.1.41 --light 192.168.1.42
 ```
 
-MAC addresses are learned from `getPilot` replies and are not required. A
+`discover` follows its registration broadcast with best-effort
+`getSystemConfig` queries. When the firmware supplies them, output includes the
+MAC address, internal module identifier (for example `ESP03_SHRGB1W_01`), and
+firmware version. The module identifier is not guaranteed to match the retail
+name printed on the box. None of these details are required for control. A
 directed broadcast can also be added to a mode or `discover` with
 `--broadcast 192.168.1.255`.
 
@@ -129,6 +156,9 @@ light-wizard visualizer --audio-file song.flac --dry-run
 
 # Preview color-cycle timing without discovering or controlling lights
 light-wizard color-cycle --frequency-hz 15 --pattern alternate --dry-run
+
+# Preview host-input activity without discovering or controlling lights
+light-wizard input-reactive --dry-run
 
 # More sensitive, lower-traffic, two-color pitch wheel
 light-wizard visualizer --sensitivity 1.8 --fps 20 \
@@ -146,8 +176,27 @@ Run `light-wizard --help` for the mode list or
 Copy [`light-wizard.example.toml`](light-wizard.example.toml) to
 `light-wizard.toml`. That filename is loaded automatically from the current
 directory, or another file can be selected with `--config path/to/file.toml`.
-Command-line values override the file. Existing configurations without a
-`[color_cycle]` section receive the built-in rainbow defaults.
+Command-line values override the file. Existing configurations without
+`[input_reactive]` or `[color_cycle]` sections receive the corresponding
+built-in defaults.
+
+### Input-reactive configuration
+
+The `[input_reactive]` section controls:
+
+- `key_boost` and `click_boost`: normalized activity contributed by each event;
+- `release_ms`: exponential activity decay time;
+- `brightness_min` and `brightness_max`: dim ambient and full-activity output;
+- `color_speed`: idle palette motion;
+- `activity_color_speed`: additional palette speed at full activity;
+- `palette` and `spatial_spread`: interpolated colors and the offset between
+  adjacent lights;
+- `fps` and `change_threshold`: network update ceiling and change suppression.
+
+The event callback never blocks, events are accumulated between frames, and the
+mode never sends WiZ's firmware-native `pulse` command. State restoration,
+explicit light selection, dry-run behavior, and the two-second keepalive match
+the other real-time modes.
 
 ### Color-cycle configuration
 
@@ -242,7 +291,7 @@ cargo clippy --all-targets -- -D warnings
 The application has unit coverage for incremental Ogg Opus decoding, exact
 file delay and EOF draining, native-rate duration, stereo downmix, bounded
 streaming memory, configuration and CLI compatibility, all twelve pitch
-classes, chord color behavior, FFT analysis, discovery broadcast math, audio
-sample conversion, color-cycle palette scheduling and WiZ payloads, custom beat
-envelopes, and safe
-restoration of RGB/temperature/scene states.
+classes, chord color behavior, FFT analysis, discovery broadcast math and
+identity parsing, audio sample conversion, input-event classification and
+energy mapping, color-cycle palette scheduling and WiZ payloads, custom beat
+envelopes, and safe restoration of RGB/temperature/scene states.
