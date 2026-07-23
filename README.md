@@ -144,7 +144,7 @@ The main tuning controls are:
 
 ### File playback synchronization
 
-`player.playback_delay_ms` defaults to 50 ms and may be overridden for one run
+`player.playback_delay_ms` defaults to 150 ms and may be overridden for one run
 with `--playback-delay-ms MS` (which requires `--audio-file`). File mode uses a
 single streaming decoder: each frame is sent to analysis immediately, while
 the original interleaved samples wait in a sample-rate-aware bounded buffer.
@@ -163,9 +163,10 @@ can auto-calibrate this value. Wi-Fi conditions, bulb processing, Rodio's
 output buffer (roughly 100 ms by default), and the selected audio device all
 contribute latency.
 
-`pulse_on_beat` is off by default. When enabled, detected beats also emit WiZ's
-native `pulse` command. Ordinary color/brightness animation uses `setPilot`, so
-the visualizer works without `pulse` support.
+`pulse_on_beat` is on by default, so detected beats also emit WiZ's native
+`pulse` command for sharper accents. Ordinary color/brightness animation uses
+`setPilot`; disable `pulse_on_beat` if a particular light model handles the
+native effect poorly.
 
 The live terminal meter reports detected note names after `N`, followed by
 tonal confidence, output RGB, and brightness. A `~` marks an uncertain but

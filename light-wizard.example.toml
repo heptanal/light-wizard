@@ -12,7 +12,7 @@ restore_state = true
 [player]
 # In file mode, analyze samples immediately and play the same audio this many
 # milliseconds later. Tune by ear for the lights, Wi-Fi, and output device.
-playback_delay_ms = 50
+playback_delay_ms = 150
 
 [visualizer]
 # Maximum WiZ network frames per second. Supported range: 1-30; unchanged
@@ -30,12 +30,12 @@ floor_db = -58.0
 ceiling_db = 0.0
 brightness_min = 8
 brightness_max = 100
-attack_ms = 45.0
-release_ms = 280.0
+attack_ms = 15.0
+release_ms = 90.0
 
 # Adaptive beat detection.
-beat_threshold = 1.4
-beat_boost = 0.22
+beat_threshold = 1.25
+beat_boost = 0.35
 beat_cooldown_ms = 180
 # Move the current chord-tone colors to the next bulb on every beat.
 rotate_colors_on_beat = true
@@ -50,8 +50,8 @@ palette = ["#ff2a68", "#7b2cff", "#008cff", "#00e5b0", "#ffd43b"]
 
 # Pitch stabilization. This confidence value is where tracking reaches full
 # speed; uncertain music still changes color more gently, while silence holds.
-pitch_smoothing_ms = 160.0
-pitch_min_confidence = 0.18
+pitch_smoothing_ms = 50.0
+pitch_min_confidence = 0.10
 
 # Legacy drift-mode controls; ignored in pitch mode.
 color_speed = 0.035
@@ -61,7 +61,7 @@ spatial_spread = 0.14
 # Suppress imperceptibly small network updates.
 change_threshold = 5
 
-# Optional native WiZ pulse command in addition to normal setPilot animation.
-pulse_on_beat = false
-pulse_delta = 18
-pulse_duration_ms = 140
+# Native WiZ pulse command in addition to normal setPilot animation.
+pulse_on_beat = true
+pulse_delta = 25
+pulse_duration_ms = 80

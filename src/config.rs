@@ -49,7 +49,7 @@ pub struct PlayerConfig {
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
-            playback_delay_ms: 50,
+            playback_delay_ms: 150,
         }
     }
 }
@@ -190,10 +190,10 @@ impl Default for VisualizerConfig {
             ceiling_db: 0.0,
             brightness_min: 8,
             brightness_max: 100,
-            attack_ms: 45.0,
-            release_ms: 280.0,
-            beat_threshold: 1.4,
-            beat_boost: 0.22,
+            attack_ms: 15.0,
+            release_ms: 90.0,
+            beat_threshold: 1.25,
+            beat_boost: 0.35,
             beat_cooldown_ms: 180,
             rotate_colors_on_beat: true,
             color_mode: ColorMode::Pitch,
@@ -204,15 +204,15 @@ impl Default for VisualizerConfig {
                 "#00e5b0".into(),
                 "#ffd43b".into(),
             ],
-            pitch_smoothing_ms: 160.0,
-            pitch_min_confidence: 0.18,
+            pitch_smoothing_ms: 50.0,
+            pitch_min_confidence: 0.10,
             color_speed: 0.035,
             color_influence: 0.65,
             spatial_spread: 0.14,
             change_threshold: 5,
-            pulse_on_beat: false,
-            pulse_delta: 18,
-            pulse_duration_ms: 140,
+            pulse_on_beat: true,
+            pulse_delta: 25,
+            pulse_duration_ms: 80,
         }
     }
 }
@@ -319,7 +319,16 @@ mod tests {
         defaults.validate().unwrap();
         assert_eq!(defaults.visualizer.fps, 30);
         assert_eq!(defaults.visualizer.ceiling_db, 0.0);
-        assert_eq!(defaults.player.playback_delay_ms, 50);
+        assert_eq!(defaults.visualizer.attack_ms, 15.0);
+        assert_eq!(defaults.visualizer.release_ms, 90.0);
+        assert_eq!(defaults.visualizer.beat_threshold, 1.25);
+        assert_eq!(defaults.visualizer.beat_boost, 0.35);
+        assert_eq!(defaults.visualizer.pitch_smoothing_ms, 50.0);
+        assert_eq!(defaults.visualizer.pitch_min_confidence, 0.10);
+        assert!(defaults.visualizer.pulse_on_beat);
+        assert_eq!(defaults.visualizer.pulse_delta, 25);
+        assert_eq!(defaults.visualizer.pulse_duration_ms, 80);
+        assert_eq!(defaults.player.playback_delay_ms, 150);
     }
 
     #[test]
@@ -330,7 +339,7 @@ mod tests {
         decoded.validate().unwrap();
         assert_eq!(decoded.visualizer.fft_size, config.visualizer.fft_size);
         assert_eq!(decoded.visualizer.color_mode, ColorMode::Pitch);
-        assert_eq!(decoded.player.playback_delay_ms, 50);
+        assert_eq!(decoded.player.playback_delay_ms, 150);
     }
 
     #[test]
@@ -343,9 +352,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded.visualizer.color_mode, ColorMode::Pitch);
-        assert_eq!(decoded.visualizer.pitch_smoothing_ms, 160.0);
+        assert_eq!(decoded.visualizer.pitch_smoothing_ms, 50.0);
         assert!(decoded.visualizer.rotate_colors_on_beat);
-        assert_eq!(decoded.player.playback_delay_ms, 50);
+        assert!(decoded.visualizer.pulse_on_beat);
+        assert_eq!(decoded.player.playback_delay_ms, 150);
         decoded.validate().unwrap();
     }
 
